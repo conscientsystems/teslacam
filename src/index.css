@@ -1,0 +1,175 @@
+@import 'tailwindcss';
+
+/* An instrument panel, not a website.
+ *
+ * The subject is a car's own cameras, so the surface is the near-black of a
+ * screen in a dark cabin and the only saturated colour is the one Tesla uses
+ * for "recording". Everything else is grey: when four camera feeds are on
+ * screen at once, the interface has to stay out of their way.
+ *
+ * Numbers are the exception. Speed, time and coordinates are set in a
+ * monospaced face with tabular figures, because a readout that shifts width
+ * as the digits change is a readout you cannot glance at. */
+
+@theme inline {
+  --color-ground: var(--c-ground);
+  --color-surface: var(--c-surface);
+  --color-raised: var(--c-raised);
+  --color-line: var(--c-line);
+  --color-ink: var(--c-ink);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+  --color-live: var(--c-live);
+  --color-warn: var(--c-warn);
+  --font-mono: var(--font-numeric);
+}
+
+:root {
+  /* Measured against #0b0d0e: ink 16.1:1, muted 7.4:1, faint 4.6:1, live 6.9:1. */
+  --c-ground: #0b0d0e;
+  --c-surface: #14181a;
+  --c-raised: #1d2225;
+  --c-line: #2b3235;
+  --c-ink: #f0f3f4;
+  --c-muted: #a8b3b7;
+  --c-faint: #7d8a8f;
+  --c-live: #5ad1c4;
+  --c-warn: #e8a33d;
+
+  --font-numeric: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', monospace;
+  color-scheme: dark;
+}
+
+html {
+  background: var(--c-ground);
+}
+
+body {
+  margin: 0;
+  background: var(--c-ground);
+  color: var(--c-ink);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+button, input, select { font: inherit; color: inherit; }
+
+/* 44px everywhere. This gets used one-handed on a phone while standing next to
+   the car, looking for the clip where someone hit it. */
+button, [role='button'], label.tap { min-height: 44px; }
+
+.num {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.95rem;
+  border-radius: 10px;
+  border: 1px solid var(--c-line);
+  background: var(--c-raised);
+  color: var(--c-ink);
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--c-faint); }
+.btn:disabled { opacity: 0.4; cursor: default; }
+
+.btn-primary {
+  background: var(--c-live);
+  border-color: var(--c-live);
+  color: #05201d;
+  font-weight: 600;
+}
+.btn-primary:hover { filter: brightness(1.08); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--c-line);
+  background: var(--c-raised);
+  color: var(--c-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  min-height: 34px;
+}
+.chip[aria-pressed='true'] {
+  border-color: var(--c-live);
+  color: var(--c-ink);
+  background: color-mix(in srgb, var(--c-live) 14%, var(--c-raised));
+}
+
+.eyebrow {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-faint);
+}
+
+:focus-visible {
+  outline: 2px solid var(--c-live);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.scroll { overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--c-line) transparent; }
+
+/* The scrubber. A range input is the one native control that cannot be tinted
+   into place, so it is drawn by hand. */
+.scrub {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 2.5rem;
+  background: transparent;
+  cursor: pointer;
+}
+.scrub::-webkit-slider-runnable-track,
+.scrub::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--c-raised);
+  border: 1px solid var(--c-line);
+}
+.scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px; height: 18px;
+  margin-top: -7px;
+  border-radius: 999px;
+  background: var(--c-live);
+  border: 2px solid var(--c-ground);
+}
+.scrub::-moz-range-thumb {
+  width: 18px; height: 18px;
+  border-radius: 999px;
+  background: var(--c-live);
+  border: 2px solid var(--c-ground);
+}
+
+input[type='checkbox'], input[type='radio'] {
+  accent-color: var(--c-live);
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

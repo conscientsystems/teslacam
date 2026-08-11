@@ -1,0 +1,3 @@
+# A viewer for someone's own dashcam footage. Nothing to index.
+User-agent: *
+Disallow: /

@@ -12,11 +12,13 @@
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
+    "mp4box": "^2.4.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
