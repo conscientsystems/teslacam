@@ -7,14 +7,15 @@
  * browser on your machine.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react'
-import ExportPanel from './components/ExportPanel'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import ExportBar from './components/ExportBar'
 import Library from './components/Library'
 import Picker from './components/Picker'
 import Player from './components/Player'
+import Timeline, { clock } from './components/Timeline'
 import type { LayoutName, OverlayOptions, Unit } from './lib/compose'
 import {
-  CAMERA_LABEL, CAMERAS, camerasIn, eventSeconds,
+  CAMERA_LABEL, CAMERAS, camerasIn, eventSeconds, measureDurations,
   type Camera, type TeslaEvent,
 } from './lib/library'
 import { speedIn, type Telemetry } from './lib/sei'
@@ -46,6 +47,15 @@ export default function App() {
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null)
   const [noTelemetry, setNoTelemetry] = useState(false)
   const [exporting, setExporting] = useState(false)
+  // The two handles, in whole-event seconds. The out-point is null until
+  // somebody moves it: the event's length grows as the segments are measured,
+  // and a number set from the estimate would freeze the selection at three
+  // assumed minutes for footage that turned out to be two minutes and four
+  // seconds - the export panel then promised 180 seconds of a 128-second event.
+  const [inSec, setInSec] = useState(0)
+  const [outSec, setOutSec] = useState<number | null>(null)
+  // Bumped when a segment reports its real length, so the timeline redraws.
+  const [measured, setMeasured] = useState(0)
 
   const opts: OverlayOptions = useMemo(() => ({ ...overlay, unit }), [overlay, unit])
   const available = selected ? camerasIn(selected) : []
@@ -62,7 +72,35 @@ export default function App() {
     setTime(0)
     setSeekTo(0)
     setPlaying(true)
+    setInSec(0)
+    setOutSec(null)
   }
+
+  // Real lengths for the timeline. The last segment of an event is usually a
+  // few seconds rather than a minute, so a timeline drawn from the assumed
+  // minute puts the out-point past the end of the footage.
+  useEffect(() => {
+    if (!selected) return
+    let live = true
+    void measureDurations(selected, () => { if (live) setMeasured((n) => n + 1) })
+    return () => { live = false }
+  }, [selected])
+
+  // I and O, as in every editor. Not while typing in a field.
+  const end = selected ? Math.max(eventSeconds(selected), total) : 0
+  useEffect(() => {
+    if (!selected) return
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) return
+      if (e.key === 'i' || e.key === 'I') setInSec(Math.min(time, (outSec ?? end) - 0.5))
+      else if (e.key === 'o' || e.key === 'O') setOutSec(Math.max(time, inSec + 0.5))
+      else if (e.key === ' ') { e.preventDefault(); setPlaying((p) => !p) }
+      else return
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected, time, inSec, outSec, end])
 
   if (!library) return <Picker onLoaded={(evts) => setLibrary(evts)} />
 
@@ -72,7 +110,10 @@ export default function App() {
     )
   }
 
-  const duration = total || eventSeconds(selected)
+  // `measured` is read so the timeline redraws when a segment reports its real
+  // length; the durations themselves live on the event object.
+  void measured
+  const duration = Math.max(eventSeconds(selected), total)
 
   return (
     <div className="mx-auto max-w-6xl px-3 pb-16 pt-3 sm:px-5">
@@ -115,24 +156,30 @@ export default function App() {
         />
       )}
 
-      {/* Transport */}
+      {/* Transport and the cut */}
       <div className="card mt-3 px-4 py-3">
-        <div className="flex items-center gap-3">
+        <div className="mb-3 flex items-center gap-3">
           <button className="btn shrink-0" onClick={() => setPlaying(!playing)}
                   aria-label={playing ? 'Pause' : 'Afspil'}>
             {playing ? '❚❚' : '▶'}
           </button>
-          <input
-            type="range" className="scrub"
-            min={0} max={Math.max(1, duration)} step={0.1}
-            value={Math.min(time, duration)}
-            onChange={(e) => { setPlaying(false); setSeekTo(Number(e.target.value)) }}
-            aria-label="Position"
-          />
           <span className="num shrink-0 text-sm text-muted">
             {clock(time)} / {clock(duration)}
           </span>
         </div>
+
+        <Timeline
+          event={selected}
+          duration={duration}
+          time={time}
+          inSec={inSec}
+          outSec={outSec ?? duration}
+          disabled={exporting}
+          onSeek={(t) => { setPlaying(false); setSeekTo(t); setTime(t) }}
+          onIn={(t) => setInSec(Math.max(0, t))}
+          onOut={(t) => setOutSec(Math.min(duration, t))}
+          onWhole={() => { setInSec(0); setOutSec(null) }}
+        />
 
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
           <div className="flex items-center gap-1.5">
@@ -162,6 +209,18 @@ export default function App() {
             </select>
           </div>
         </div>
+
+        {/* The export acts on the selection above it, so it lives in the same
+            card rather than in a dialog that covers the picture. */}
+        <ExportBar
+          event={selected}
+          cameras={cameras}
+          layout={layout}
+          overlay={opts}
+          fromSec={inSec}
+          toSec={outSec ?? duration}
+          onBusy={(busy) => { if (busy) setPlaying(false); setExporting(busy) }}
+        />
       </div>
 
       {/* Readout and overlay switches */}
@@ -225,22 +284,6 @@ export default function App() {
           </div>
         </div>
       </div>
-
-      <div className="mt-3">
-        <button className="btn btn-primary" onClick={() => { setPlaying(false); setExporting(true) }}>
-          Eksportér som video
-        </button>
-      </div>
-
-      {exporting && (
-        <ExportPanel
-          event={selected}
-          cameras={cameras}
-          layout={layout}
-          overlay={opts}
-          onClose={() => setExporting(false)}
-        />
-      )}
     </div>
   )
 }
@@ -250,12 +293,6 @@ function titleOf(e: TeslaEvent): string {
     weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
   })
   return when.charAt(0).toUpperCase() + when.slice(1)
-}
-
-function clock(sec: number): string {
-  const s = Math.max(0, Math.floor(sec))
-  const m = Math.floor(s / 60)
-  return `${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
 
 function apLabel(state: string): string {

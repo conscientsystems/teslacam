@@ -15,7 +15,7 @@ import { test } from 'node:test'
 
 import { CLIP_FPS, buildIndex, extractTelemetry, speedIn, telemetrySeconds } from '../src/lib/sei.ts'
 
-const ROOT = process.env.TESLACAM_DIR ?? 'G:/TeslaCam'
+const ROOT = process.env.TESLACAM_DIR ?? 'D:/TeslaCam'
 const RECENT = path.join(ROOT, 'RecentClips')
 
 function read(p: string): ArrayBuffer {
@@ -29,14 +29,21 @@ function frontClips(): string[] {
     .map((f) => path.join(RECENT, f))
 }
 
+/** Any clip from before the firmware that writes telemetry. Both event folders
+ *  are searched, and any camera will do: a 2024 saved event often has only two
+ *  of them, and looking solely for a front camera in SentryClips quietly
+ *  skipped the test on a folder that did contain an old clip. */
 function oldClip(): string | null {
-  const dir = path.join(ROOT, 'SentryClips')
-  if (!fs.existsSync(dir)) return null
-  for (const folder of fs.readdirSync(dir).sort()) {
-    if (!folder.startsWith('2024')) continue
-    const full = path.join(dir, folder)
-    const f = fs.readdirSync(full).find((x) => x.endsWith('-front.mp4'))
-    if (f) return path.join(full, f)
+  for (const source of ['SentryClips', 'SavedClips']) {
+    const dir = path.join(ROOT, source)
+    if (!fs.existsSync(dir)) continue
+    for (const folder of fs.readdirSync(dir).sort()) {
+      if (!/^20(2[0-4])/.test(folder)) continue
+      const full = path.join(dir, folder)
+      if (!fs.statSync(full).isDirectory()) continue
+      const f = fs.readdirSync(full).find((x) => x.endsWith('.mp4'))
+      if (f) return path.join(full, f)
+    }
   }
   return null
 }

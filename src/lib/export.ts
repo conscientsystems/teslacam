@@ -34,10 +34,44 @@ export interface ExportRequest {
   cameras: Camera[]
   layout: LayoutName
   overlay: OverlayOptions
-  /** Inclusive segment range, so a ten-minute event can yield ten seconds. */
-  fromSegment: number
-  toSegment: number
+  /** In and out points in whole-event seconds - the timeline's two handles.
+   *  Cutting used to be by whole one-minute files, which meant exporting a
+   *  four-second near-miss produced a minute of driving around it. */
+  fromSec: number
+  toSec: number
   lang: 'da' | 'en'
+}
+
+/** One segment's share of the selection, in seconds inside that segment. */
+export interface TrimPart {
+  index: number
+  fromOffset: number
+  toOffset: number
+}
+
+/**
+ * Which part of which file the two handles select.
+ *
+ * Kept separate from the export itself because it is the part that is easy to
+ * get wrong and easy to test: an in-point inside segment 3, an out-point in
+ * the middle of segment 5, and the segments between them taken whole.
+ */
+export function planTrim(event: TeslaEvent, fromSec: number, toSec: number): TrimPart[] {
+  const from = Math.max(0, Math.min(fromSec, toSec))
+  const to = Math.max(fromSec, toSec)
+  const parts: TrimPart[] = []
+  let start = 0
+  for (let i = 0; i < event.segments.length; i++) {
+    const dur = event.segments[i].durationSec ?? 60
+    const end = start + dur
+    const a = Math.max(from, start)
+    const b = Math.min(to, end)
+    // A handle landing exactly on a boundary must not add an empty part, or
+    // the exporter opens a 40 MB file to write nothing from it.
+    if (b - a > 0.001) parts.push({ index: i, fromOffset: a - start, toOffset: b - start })
+    start = end
+  }
+  return parts
 }
 
 export interface ExportProgress {
@@ -256,17 +290,21 @@ export async function exportVideo(
     framerate: CLIP_FPS,
   })
 
-  const segments = req.event.segments.slice(req.fromSegment, req.toSegment + 1)
+  const parts = planTrim(req.event, req.fromSec, req.toSec)
+  if (!parts.length) throw new Error('Markeringen er tom')
+  const wanted = parts.reduce((n, p) => n + (p.toOffset - p.fromOffset), 0)
   let written = 0
+  let done = 0                      // seconds of the selection already written
   const frameDur = 1e6 / CLIP_FPS
 
   try {
-    for (let si = 0; si < segments.length; si++) {
+    for (let si = 0; si < parts.length; si++) {
       if (signal?.aborted) throw new Error('Afbrudt')
-      const seg = segments[si]
+      const part = parts[si]
+      const seg = req.event.segments[part.index]
       onProgress({
-        phase: 'decoding', segment: si + 1, segments: segments.length,
-        frames: written, fraction: si / segments.length,
+        phase: 'decoding', segment: si + 1, segments: parts.length,
+        frames: written, fraction: done / wanted,
       })
 
       const sources = new Map<Camera, Demuxed>()
@@ -282,7 +320,6 @@ export async function exportVideo(
         (a, b) => b.telemetry.length - a.telemetry.length)[0]
       const hud = buildIndex(richest.telemetry)
       const noTelemetry = richest.telemetry.length === 0
-      const expected = Math.max(...[...sources.values()].map((s) => s.chunks.length))
 
       const streams = new Map<Camera, FrameStream>()
       for (const [cam, src] of sources) streams.set(cam, new FrameStream(src))
@@ -290,6 +327,13 @@ export async function exportVideo(
       try {
         for (let f = 0; ; f++) {
           if (signal?.aborted) throw new Error('Afbrudt')
+
+          const t = f / CLIP_FPS
+          // Past the out-point: stop this file rather than decode the rest of
+          // it. The frames before the in-point cannot be skipped the same way -
+          // H.264 frames depend on the ones before them, so they are decoded
+          // and thrown away.
+          if (t >= part.toOffset) break
 
           // One frame from every camera, in step.
           const frames = new Map<Camera, VideoFrame>()
@@ -299,7 +343,10 @@ export async function exportVideo(
           }
           if (!frames.size) break
 
-          const t = f / CLIP_FPS
+          if (t < part.fromOffset) {
+            for (const frame of frames.values()) frame.close()
+            continue
+          }
           ctx.fillStyle = '#000'
           ctx.fillRect(0, 0, size.w, size.h)
 
@@ -334,26 +381,27 @@ export async function exportVideo(
           }
           if (f % 30 === 0) {
             onProgress({
-              phase: 'encoding', segment: si + 1, segments: segments.length,
+              phase: 'encoding', segment: si + 1, segments: parts.length,
               frames: written,
-              fraction: (si + Math.min(1, f / Math.max(1, expected))) / segments.length,
+              fraction: Math.min(0.98, (done + (t - part.fromOffset)) / wanted),
             })
           }
         }
       } finally {
         for (const stream of streams.values()) stream.close()
       }
+      done += part.toOffset - part.fromOffset
     }
 
     onProgress({
-      phase: 'writing', segment: segments.length, segments: segments.length,
+      phase: 'writing', segment: parts.length, segments: parts.length,
       frames: written, fraction: 0.99,
     })
     await encoder.flush()
     muxer.finalize()
 
     onProgress({
-      phase: 'done', segment: segments.length, segments: segments.length,
+      phase: 'done', segment: parts.length, segments: parts.length,
       frames: written, fraction: 1,
     })
     const { buffer } = muxer.target as ArrayBufferTarget
@@ -363,10 +411,23 @@ export async function exportVideo(
   }
 }
 
-/** A filename that says what it is without being opened. */
+/** A filename that says what it is without being opened: the clock time the
+ *  selection starts at, and how long it runs. */
 export function exportName(req: ExportRequest): string {
-  const seg = req.event.segments[req.fromSegment]
-  const stamp = seg ? seg.key : 'teslacam'
+  const parts = planTrim(req.event, req.fromSec, req.toSec)
+  const first = parts[0]
+  const seg = first ? req.event.segments[first.index] : undefined
+  const at = seg ? new Date(seg.startedAt.getTime() + first.fromOffset * 1000) : req.event.startedAt
+  const stamp = [
+    at.getFullYear(),
+    String(at.getMonth() + 1).padStart(2, '0'),
+    String(at.getDate()).padStart(2, '0'),
+  ].join('-') + '_' + [
+    String(at.getHours()).padStart(2, '0'),
+    String(at.getMinutes()).padStart(2, '0'),
+    String(at.getSeconds()).padStart(2, '0'),
+  ].join('-')
+  const secs = Math.max(1, Math.round(Math.abs(req.toSec - req.fromSec)))
   const cams = req.cameras.length === 4 ? 'alle' : req.cameras.length
-  return `teslacam_${stamp}_${cams}kam.mp4`
+  return `teslacam_${stamp}_${secs}s_${cams}kam.mp4`
 }

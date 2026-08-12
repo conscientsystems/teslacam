@@ -258,3 +258,41 @@ export function segmentStart(event: TeslaEvent, index: number): number {
   for (let i = 0; i < index; i++) acc += event.segments[i].durationSec ?? 60
   return acc
 }
+
+/**
+ * Measure every segment, so the timeline is drawn from real lengths.
+ *
+ * Durations used to arrive one at a time, as the player reached each file. A
+ * scrub bar can live with that; two trim handles cannot - the last segment of
+ * an event is usually a few seconds rather than a minute, so an unmeasured
+ * timeline puts the out-point past the end of the footage and the exported
+ * file is shorter than the selection said.
+ *
+ * Only the moov atom is read: `preload="metadata"` does not fetch the frames.
+ */
+export async function measureDurations(
+  event: TeslaEvent,
+  onEach?: (index: number) => void,
+): Promise<void> {
+  for (let i = 0; i < event.segments.length; i++) {
+    const seg = event.segments[i]
+    if (seg.durationSec !== undefined) continue
+    const file = CAMERAS.map((c) => seg.files[c]).find(Boolean)
+    if (!file) continue
+    const url = URL.createObjectURL(file)
+    try {
+      seg.durationSec = await new Promise<number>((resolve) => {
+        const el = document.createElement('video')
+        el.preload = 'metadata'
+        el.muted = true
+        const finish = (d: number) => { el.removeAttribute('src'); el.load(); resolve(d) }
+        el.onloadedmetadata = () => finish(Number.isFinite(el.duration) ? el.duration : 60)
+        el.onerror = () => finish(60)
+        el.src = url
+      })
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+    onEach?.(i)
+  }
+}

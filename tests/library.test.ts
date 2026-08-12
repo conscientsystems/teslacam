@@ -14,7 +14,7 @@ import {
   camerasIn, eventSeconds, locate, scanLibrary, segmentStart, type TeslaEvent,
 } from '../src/lib/library.ts'
 
-const ROOT = process.env.TESLACAM_DIR ?? 'G:/TeslaCam'
+const ROOT = process.env.TESLACAM_DIR ?? 'D:/TeslaCam'
 
 /** The slice of FileSystemDirectoryHandle that scanLibrary uses, over a real
  *  directory. Files are lazy: reading 10 GB to test the grouping would be
@@ -54,9 +54,16 @@ test('scanning a real TeslaCam folder', async (t) => {
   library = await scanLibrary(handleFor(ROOT))
 
   assert.ok(library.length > 0, 'events were found')
-  assert.ok(library.some((e) => e.source === 'SentryClips'), 'sentry events')
-  assert.ok(library.some((e) => e.source === 'SavedClips'), 'saved events')
-  assert.ok(library.some((e) => e.source === 'RecentClips'), 'the recent buffer')
+
+  // Each of the three folders, but only where the stick actually has one.
+  // Requiring all three made the suite fail on a copy of the data with no
+  // sentry events in it - a fact about that folder, not about the scanner.
+  for (const source of ['SentryClips', 'SavedClips', 'RecentClips'] as const) {
+    const onDisk = fs.existsSync(path.join(ROOT, source))
+      && fs.readdirSync(path.join(ROOT, source)).length > 0
+    if (!onDisk) continue
+    assert.ok(library.some((e) => e.source === source), `${source} events`)
+  }
 
   // Newest first. Someone opening this is looking for what just happened.
   const times = library.map((e) => e.startedAt.getTime())
@@ -65,7 +72,8 @@ test('scanning a real TeslaCam folder', async (t) => {
 
 test('a segment groups its cameras under one timestamp', (t) => {
   if (!library.length) return t.skip('nothing scanned')
-  const recent = library.find((e) => e.source === 'RecentClips')!
+  const recent = library.find((e) => e.source === 'RecentClips')
+  if (!recent) return t.skip('no recent buffer in this folder')
   const seg = recent.segments[0]
   assert.ok(seg.files.front, 'front')
   assert.ok(seg.files.back, 'back')

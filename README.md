@@ -55,7 +55,7 @@ Three things measured on real clips, each of which contradicted an assumption:
 ```bash
 npm install
 npm run dev            # http://localhost:5174
-npm test               # 14 assertions against a real TeslaCam folder
+npm test               # 23 assertions against a real TeslaCam folder
 TESLACAM_DIR=/path/to/TeslaCam npm test
 ```
 
@@ -63,6 +63,33 @@ The tests read an actual dashcam folder rather than a fixture. A synthetic SEI
 packet would only prove the decoder agrees with itself; these assert on physics
 and geography - a car in Denmark at a plausible speed, with a frame counter that
 only goes forward.
+
+## Trimming
+
+The export range is two handles on the timeline, in seconds - not whole files.
+Both are read back off the same timeline the playhead runs on, so what you see
+selected is what lands in the MP4. `planTrim()` in `src/lib/export.ts` turns the
+two numbers into a part per file and is unit-tested on its own; the exporter
+just follows it.
+
+Frames before the in-point are decoded and thrown away rather than skipped:
+H.264 frames depend on the ones before them, so an in-point 58 seconds into a
+file costs 58 seconds of decoding. Frames after the out-point cost nothing - the
+file is simply left.
+
+**Segment lengths are measured before the timeline is drawn.** They used to
+arrive one at a time as the player reached each file, with an assumed minute
+until then. A scrub bar can live with that; two trim handles cannot - the last
+segment of an event is usually a few seconds, so the estimate put the out-point
+past the end of the footage and a "3 minutes" selection produced 2:04 of video.
+`measureDurations()` reads each file's moov atom up front.
+
+**The event timeline is not wall-clock time.** Tesla's files overlap: in the
+reference event the first clip is 56.2 s long but the next one starts 49 s after
+it, so playing straight through repeats about seven seconds. Durations are
+concatenated, and every burned-in clock is computed from its own segment's start
+time, so the overlay stays right even though the timeline and the wall clock
+drift apart.
 
 ## Two traps worth knowing before changing anything
 
