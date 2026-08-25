@@ -13,7 +13,33 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react'
-import type { TeslaEvent } from '../lib/library'
+import type { EventAction, TeslaEvent } from '../lib/library'
+import type { ActionKind } from '../lib/sei'
+
+/** What each manoeuvre is called, and the colour that marks it. Amber for the
+ *  indicators (as the car's own tell-tale), red for braking, orange for
+ *  reversing, teal for autopilot on (the app's live colour), grey for off. */
+const ACTION_LABEL: Record<ActionKind, string> = {
+  blinker_left: 'Blink venstre',
+  blinker_right: 'Blink højre',
+  brake: 'Bremser',
+  reverse: 'Bakker',
+  autopilot_on: 'Autopilot til',
+  autopilot_off: 'Autopilot fra',
+}
+const ACTION_COLOR: Record<ActionKind, string> = {
+  blinker_left: '#e8a33d',
+  blinker_right: '#e8a33d',
+  brake: '#ef4444',
+  reverse: '#f97316',
+  autopilot_on: '#5ad1c4',
+  autopilot_off: '#7d8a8f',
+}
+/** Order the legend and stack markers by, so overlapping markers show the more
+ *  notable manoeuvre on top. */
+const ACTION_ORDER: ActionKind[] = [
+  'brake', 'reverse', 'autopilot_on', 'autopilot_off', 'blinker_left', 'blinker_right',
+]
 
 export interface TimelineProps {
   event: TeslaEvent
@@ -22,6 +48,8 @@ export interface TimelineProps {
   time: number
   inSec: number
   outSec: number
+  /** Manoeuvres pulled from telemetry, in whole-event seconds. */
+  actions?: EventAction[]
   onSeek: (t: number) => void
   onIn: (t: number) => void
   onOut: (t: number) => void
@@ -38,7 +66,7 @@ type Grab = 'in' | 'out' | 'playhead'
 const MIN_SELECTION = 0.5
 
 export default function Timeline({
-  event, duration, time, inSec, outSec, onSeek, onIn, onOut, onWhole, disabled,
+  event, duration, time, inSec, outSec, actions = [], onSeek, onIn, onOut, onWhole, disabled,
 }: TimelineProps) {
   const track = useRef<HTMLDivElement>(null)
   const grabbed = useRef<Grab | null>(null)
@@ -96,8 +124,39 @@ export default function Timeline({
     apply(what, (what === 'in' ? inSec : outSec) + dir * step)
   }
 
+  const presentKinds = ACTION_ORDER.filter((k) => actions.some((a) => a.kind === k))
+  // Draw the more notable manoeuvres last, so they sit on top where markers overlap.
+  const sortedActions = [...actions].sort(
+    (a, b) => ACTION_ORDER.indexOf(b.kind) - ACTION_ORDER.indexOf(a.kind),
+  )
+
   return (
     <div className="select-none">
+      {/* Manoeuvre markers, above the track so they never sit under the trim
+          handles or the scrub area. Click one to jump to it. */}
+      {actions.length > 0 && (
+        <div className="relative mb-1 h-3.5">
+          {sortedActions.map((a, i) => (
+            <button
+              key={`${a.kind}-${a.atSec.toFixed(2)}-${i}`}
+              type="button"
+              disabled={disabled}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => onSeek(a.atSec)}
+              title={`${ACTION_LABEL[a.kind]} · ${clock(a.atSec)}`}
+              aria-label={`${ACTION_LABEL[a.kind]} ved ${clock(a.atSec)}`}
+              className="group absolute bottom-0 -translate-x-1/2 cursor-pointer disabled:cursor-default"
+              style={{ left: pct(a.atSec) }}
+            >
+              <span
+                className="block h-2.5 w-2.5 rounded-full ring-1 ring-black/50 transition-transform group-hover:scale-150"
+                style={{ background: ACTION_COLOR[a.kind] }}
+              />
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Two layers on purpose. The fills are clipped to the rounded track;
           the handles are not, because the out-handle sits at the very end and
           `overflow-hidden` made its right half unclickable - grabbing it hit
@@ -125,6 +184,14 @@ export default function Timeline({
              style={{ left: pct(outSec), right: 0 }} />
         <div className="absolute inset-y-0 border-x-2 border-live bg-live/10"
              style={{ left: pct(inSec), width: pct(outSec - inSec) }} />
+
+        {/* A hairline under each manoeuvre marker, so its position on the track
+            is exact. pointer-events-none: they must never block scrubbing. */}
+        {sortedActions.map((a, i) => (
+          <div key={`line-${a.kind}-${a.atSec.toFixed(2)}-${i}`}
+               className="pointer-events-none absolute inset-y-0 w-px opacity-60"
+               style={{ left: pct(a.atSec), background: ACTION_COLOR[a.kind] }} />
+        ))}
 
         {/* Playhead */}
         <div className="pointer-events-none absolute inset-y-0 w-0.5 bg-white"
@@ -171,6 +238,19 @@ export default function Timeline({
           <span className="ml-2 text-faint">({clock(outSec - inSec)} valgt)</span>
         </p>
       </div>
+
+      {/* Legend: only the manoeuvres this event actually contains. */}
+      {presentKinds.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+          {presentKinds.map((k) => (
+            <span key={k} className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full" style={{ background: ACTION_COLOR[k] }} />
+              {ACTION_LABEL[k]}
+            </span>
+          ))}
+          <span className="text-faint">· klik en markør for at hoppe dertil</span>
+        </div>
+      )}
     </div>
   )
 }

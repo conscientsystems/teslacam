@@ -15,8 +15,8 @@ import Player from './components/Player'
 import Timeline, { clock } from './components/Timeline'
 import type { LayoutName, OverlayOptions, Unit } from './lib/compose'
 import {
-  CAMERA_LABEL, CAMERAS, camerasIn, eventSeconds, measureDurations,
-  type Camera, type TeslaEvent,
+  CAMERA_LABEL, CAMERAS, camerasIn, collectActions, eventSeconds, measureDurations,
+  type Camera, type EventAction, type TeslaEvent,
 } from './lib/library'
 import { speedIn, type Telemetry } from './lib/sei'
 
@@ -56,6 +56,9 @@ export default function App() {
   const [outSec, setOutSec] = useState<number | null>(null)
   // Bumped when a segment reports its real length, so the timeline redraws.
   const [measured, setMeasured] = useState(0)
+  // Manoeuvres pulled from the telemetry, marked on the timeline. Filled in
+  // progressively as each segment is parsed.
+  const [actions, setActions] = useState<EventAction[]>([])
 
   const opts: OverlayOptions = useMemo(() => ({ ...overlay, unit }), [overlay, unit])
   const available = selected ? camerasIn(selected) : []
@@ -74,6 +77,7 @@ export default function App() {
     setPlaying(true)
     setInSec(0)
     setOutSec(null)
+    setActions([])
   }
 
   // Real lengths for the timeline. The last segment of an event is usually a
@@ -83,6 +87,16 @@ export default function App() {
     if (!selected) return
     let live = true
     void measureDurations(selected, () => { if (live) setMeasured((n) => n + 1) })
+    return () => { live = false }
+  }, [selected])
+
+  // Pull the manoeuvres out of every segment's telemetry for the timeline. Runs
+  // after the event opens and updates as it goes, so markers appear segment by
+  // segment rather than after the whole event is read.
+  useEffect(() => {
+    if (!selected) return
+    let live = true
+    void collectActions(selected, (a) => { if (live) setActions(a) }, () => !live)
     return () => { live = false }
   }, [selected])
 
@@ -174,6 +188,7 @@ export default function App() {
           time={time}
           inSec={inSec}
           outSec={outSec ?? duration}
+          actions={actions}
           disabled={exporting}
           onSeek={(t) => { setPlaying(false); setSeekTo(t); setTime(t) }}
           onIn={(t) => setInSec(Math.max(0, t))}

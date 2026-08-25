@@ -22,6 +22,8 @@
  *     buffer holds, so consecutive timestamps can be minutes apart.
  */
 
+import { detectActions, extractTelemetry, type ActionKind } from './sei'
+
 export const CAMERAS = ['front', 'left_repeater', 'right_repeater', 'back'] as const
 export type Camera = (typeof CAMERAS)[number]
 
@@ -228,6 +230,49 @@ async function listDirs(
  *  Replaced with measured durations once the videos have loaded. */
 export function eventSeconds(event: TeslaEvent): number {
   return event.segments.reduce((n, s) => n + (s.durationSec ?? 60), 0)
+}
+
+/** A detected manoeuvre, placed in whole-event seconds so the timeline can mark
+ *  it. `segmentIndex` lets a click seek straight to it. */
+export interface EventAction {
+  atSec: number
+  kind: ActionKind
+  segmentIndex: number
+}
+
+/**
+ * Read the telemetry of every segment and pull out the manoeuvres, mapped to
+ * whole-event seconds. Reports progressively so the markers appear as each
+ * segment is parsed rather than after the whole event is read.
+ *
+ * Front carries the most telemetry, so only it is read per segment (falling
+ * back to whatever camera exists) - reading all four would be four 40 MB loads
+ * per segment for at most a marker or two more. Uses the same segment start as
+ * the player's clock, so a marker sits exactly under the playhead when reached.
+ */
+export async function collectActions(
+  event: TeslaEvent,
+  onProgress?: (actions: EventAction[]) => void,
+  isCancelled?: () => boolean,
+): Promise<EventAction[]> {
+  const all: EventAction[] = []
+  for (let i = 0; i < event.segments.length; i++) {
+    if (isCancelled?.()) return all
+    const seg = event.segments[i]
+    const file = seg.files.front ?? CAMERAS.map((c) => seg.files[c]).find(Boolean)
+    if (!file) continue
+    try {
+      const { samples } = extractTelemetry(await file.arrayBuffer())
+      const base = segmentStart(event, i)
+      for (const m of detectActions(samples)) {
+        all.push({ atSec: base + m.atSec, kind: m.kind, segmentIndex: i })
+      }
+    } catch {
+      // A single unreadable segment must not lose the markers from the rest.
+    }
+    onProgress?.(all.slice())
+  }
+  return all
 }
 
 /** Which cameras this event has any footage from at all. A saved event with

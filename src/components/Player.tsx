@@ -50,11 +50,22 @@ export default function Player({
   const hud = useRef<HTMLCanvasElement>(null)
   const [index, setIndex] = useState(0)
   const [urls, setUrls] = useState<Map<Camera, string>>(new Map())
+  // A seek that lands in a *different* segment can't be applied now: setIndex
+  // swaps every src in a later effect and the videos reload to 0, so the offset
+  // has to wait until the new segment's video is ready. Stashed here, applied in
+  // onLoadedMetadata below.
+  const pendingSeek = useRef<number | null>(null)
   const telemetry = useRef<{ at: ReturnType<typeof buildIndex>; empty: boolean }>({
     at: null, empty: true,
   })
 
   const segment = event.segments[index]
+
+  // Read the current segment index inside the seek effect without making index a
+  // dependency: setIndex would otherwise re-run the effect with the same seekTo
+  // and clear pendingSeek before the new segment's video ever loads.
+  const indexRef = useRef(index)
+  indexRef.current = index
 
   // ---- object URLs for the current segment, revoked when it changes
   useEffect(() => {
@@ -117,15 +128,24 @@ export default function Player({
     }
   }, [playing, urls, present])
 
-  // ---- an outside seek, in whole-event seconds
+  // ---- an outside seek, in whole-event seconds. Keyed on seekTo/event only:
+  // see indexRef above for why index is deliberately not a dependency.
   useEffect(() => {
     if (seekTo === null) return
     const { index: i, offset } = locate(event, seekTo)
-    if (i !== index) setIndex(i)
-    for (const el of refs.current.values()) {
-      if (el.readyState >= 1) el.currentTime = offset
+    if (i !== indexRef.current) {
+      // Different segment: defer the offset until the new segment loads,
+      // otherwise it lands on the old file and the new one starts at 0 - the
+      // "jump to a point in another segment is unstable" bug.
+      pendingSeek.current = offset
+      setIndex(i)
+    } else {
+      pendingSeek.current = null
+      for (const el of refs.current.values()) {
+        if (el.readyState >= 1) el.currentTime = offset
+      }
     }
-  }, [seekTo, event, index])
+  }, [seekTo, event])
 
   // ---- the HUD, drawn on a canvas over the videos
   useEffect(() => {
@@ -205,6 +225,17 @@ export default function Player({
                 if (cam !== lead) return
                 const d = e.currentTarget.duration
                 if (Number.isFinite(d)) segment && (segment.durationSec = d)
+                // Apply a seek that was waiting for this segment to load. Set the
+                // lead here and every camera that's ready; the rest are pulled
+                // into line by syncOthers on the next frame.
+                if (pendingSeek.current !== null) {
+                  const off = pendingSeek.current
+                  pendingSeek.current = null
+                  e.currentTarget.currentTime = off
+                  for (const el of refs.current.values()) {
+                    if (el.readyState >= 1) el.currentTime = off
+                  }
+                }
                 if (playing) void e.currentTarget.play().catch(() => {})
               }}
               className="absolute object-contain"

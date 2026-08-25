@@ -13,7 +13,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { CLIP_FPS, buildIndex, extractTelemetry, speedIn, telemetrySeconds } from '../src/lib/sei.ts'
+import {
+  CLIP_FPS, buildIndex, detectActions, extractTelemetry, speedIn, telemetrySeconds,
+  type Telemetry,
+} from '../src/lib/sei.ts'
 
 const ROOT = process.env.TESLACAM_DIR ?? 'D:/TeslaCam'
 const RECENT = path.join(ROOT, 'RecentClips')
@@ -153,6 +156,72 @@ test('the index maps a playback position to a sample, and stops when data does',
 test('an empty sample list produces no index', () => {
   assert.equal(buildIndex([]), null)
   assert.equal(telemetrySeconds([]), 0)
+})
+
+function sample(frame: number, over: Partial<Telemetry> = {}): Telemetry {
+  return {
+    version: 1, gear: 'drive', frame, speedMps: 10, acceleratorPct: 0, steeringDeg: 0,
+    blinkerLeft: false, blinkerRight: false, braking: false, autopilot: 'none',
+    lat: 55, lon: 10, headingDeg: 0, accelX: 0, accelY: 0, accelZ: 0, ...over,
+  }
+}
+
+test('one manoeuvre is one marker: a whole indicator burst does not flood', () => {
+  // A blinker ticks ~1 Hz, so five seconds of it is a run of "on" samples. That
+  // is one turn signal, and it must produce one marker, not one per tick.
+  const burst = Array.from({ length: 200 }, (_, i) => sample(i, { blinkerLeft: true }))
+  const marks = detectActions(burst).filter((a) => a.kind === 'blinker_left')
+  assert.equal(marks.length, 1, 'a continuous burst is a single marker')
+  assert.equal(marks[0].atSec, 0)
+})
+
+test('two indicator uses separated by a real pause are two markers', () => {
+  // First burst, then longer than the merge window with the blinker off, then a
+  // second burst: two distinct turn signals.
+  const seq = [
+    ...Array.from({ length: 31 }, (_, i) => sample(i, { blinkerLeft: true })),   // 0..30
+    ...Array.from({ length: 90 }, (_, i) => sample(31 + i)),                     // 31..120 off (2.5 s)
+    ...Array.from({ length: 30 }, (_, i) => sample(121 + i, { blinkerLeft: true })), // 121..150
+  ]
+  const marks = detectActions(seq).filter((a) => a.kind === 'blinker_left')
+  assert.equal(marks.length, 2, 'a gap longer than the merge window starts a new marker')
+  assert.ok(Math.abs(marks[0].atSec - 0) < 0.001)
+  assert.ok(Math.abs(marks[1].atSec - 121 / CLIP_FPS) < 0.001)
+})
+
+test('autopilot marks both the engage and the disengage', () => {
+  const seq = [
+    ...Array.from({ length: 10 }, (_, i) => sample(i)),                                   // off
+    ...Array.from({ length: 10 }, (_, i) => sample(10 + i, { autopilot: 'autosteer' })),  // on
+    ...Array.from({ length: 10 }, (_, i) => sample(20 + i)),                              // off
+  ]
+  const marks = detectActions(seq).filter((a) => a.kind.startsWith('autopilot'))
+  assert.deepEqual(marks.map((m) => m.kind), ['autopilot_on', 'autopilot_off'])
+  assert.ok(Math.abs(marks[0].atSec - 10 / CLIP_FPS) < 0.001, 'engaged where it turned on')
+})
+
+test('markers come out sorted and inside the clip, on real footage', (t) => {
+  const clips = frontClips()
+  if (!clips.length) return t.skip(`no clips under ${RECENT}`)
+
+  let sawAny = false
+  for (const c of clips) {
+    const { samples } = extractTelemetry(read(c))
+    if (!samples.length) continue
+    const actions = detectActions(samples)
+    const span = telemetrySeconds(samples)
+    for (let i = 1; i < actions.length; i++) {
+      assert.ok(actions[i].atSec >= actions[i - 1].atSec, 'markers are sorted by time')
+    }
+    for (const a of actions) {
+      assert.ok(a.atSec >= 0 && a.atSec <= span + 1, `marker ${a.kind} at ${a.atSec}s is inside the clip`)
+    }
+    // Merged, not per-sample: an indicator on for hundreds of frames is a
+    // handful of markers, never hundreds.
+    assert.ok(actions.length <= samples.length / 10, 'markers are manoeuvres, not per-frame')
+    if (actions.length) sawAny = true
+  }
+  assert.ok(sawAny, 'a drive contains at least one detectable manoeuvre')
 })
 
 test('a stationary car reads zero, not minus zero', () => {

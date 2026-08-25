@@ -255,6 +255,72 @@ export function buildIndex(samples: Telemetry[], fps: number = CLIP_FPS) {
   }
 }
 
+/**
+ * Actions worth marking on the timeline, derived from the telemetry we actually
+ * have. Tesla's dashcam SEI does NOT carry the horn - measured across 543 of
+ * Tor's 2026 clips (972k messages) the only fields present are 1-15, and none of
+ * them is a horn press; the horn only survives as a Sentry trigger reason in
+ * event.json (`user_interaction_honk`), i.e. per event, not per second. So we
+ * mark what the bitstream does carry: indicators, braking, reversing and
+ * autopilot engagement - the moments someone scrubbing an incident looks for.
+ */
+export type ActionKind =
+  | 'blinker_left'
+  | 'blinker_right'
+  | 'brake'
+  | 'reverse'
+  | 'autopilot_on'
+  | 'autopilot_off'
+
+export interface ActionMarker {
+  /** Seconds from the start of this segment (mapped to event time by the caller). */
+  atSec: number
+  kind: ActionKind
+}
+
+/** A blinker ticks on and off ~1 Hz and braking stutters; merging active
+ *  samples within this gap turns one manoeuvre into one marker instead of a
+ *  cluster of them. */
+const ACTION_MERGE_GAP_S = 1.5
+
+/**
+ * One marker per manoeuvre. A boolean signal (blinker, brake, reverse) marks the
+ * rising edge after any gap longer than the merge window; autopilot marks both
+ * the engage and the disengage, because both are what you scrub to.
+ */
+export function detectActions(samples: Telemetry[], fps: number = CLIP_FPS): ActionMarker[] {
+  if (samples.length < 2 || fps <= 0) return []
+  const first = samples[0].frame
+  const sec = (frame: number) => (frame - first) / fps
+  const out: ActionMarker[] = []
+
+  const risingPeriods = (active: (t: Telemetry) => boolean, kind: ActionKind) => {
+    let lastActiveFrame: number | null = null
+    for (const s of samples) {
+      if (!active(s)) continue
+      if (lastActiveFrame === null || (s.frame - lastActiveFrame) / fps > ACTION_MERGE_GAP_S) {
+        out.push({ atSec: sec(s.frame), kind })
+      }
+      lastActiveFrame = s.frame
+    }
+  }
+
+  risingPeriods((t) => t.blinkerLeft, 'blinker_left')
+  risingPeriods((t) => t.blinkerRight, 'blinker_right')
+  risingPeriods((t) => t.braking, 'brake')
+  risingPeriods((t) => t.gear === 'reverse', 'reverse')
+
+  let apOn = false
+  for (const s of samples) {
+    const on = s.autopilot !== 'none'
+    if (on && !apOn) out.push({ atSec: sec(s.frame), kind: 'autopilot_on' })
+    else if (!on && apOn) out.push({ atSec: sec(s.frame), kind: 'autopilot_off' })
+    apOn = on
+  }
+
+  return out.sort((a, b) => a.atSec - b.atSec)
+}
+
 /** The last playback second the telemetry reaches, so the UI can say "data
  *  stops after 41 s" rather than going quiet with no explanation. */
 export function telemetrySeconds(samples: Telemetry[], fps: number = CLIP_FPS): number {
