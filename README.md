@@ -116,3 +116,7 @@ names lazily - a sentry folder is tens of gigabytes and the scan must not read
 it. Firefox and Safari fall back to `<input webkitdirectory>`, which works but
 loads the tree up front. Export needs **WebCodecs**; where it is missing the app
 says so and everything else still works.
+
+## License
+
+MIT - see [LICENSE](LICENSE).
