@@ -14,7 +14,7 @@ import {
   camerasIn, eventSeconds, locate, scanLibrary, segmentStart, type TeslaEvent,
 } from '../src/lib/library.ts'
 
-const ROOT = process.env.TESLACAM_DIR ?? 'D:/TeslaCam'
+const ROOT = process.env.TESLACAM_DIR ?? './TeslaCam'
 
 /** The slice of FileSystemDirectoryHandle that scanLibrary uses, over a real
  *  directory. Files are lazy: reading 10 GB to test the grouping would be

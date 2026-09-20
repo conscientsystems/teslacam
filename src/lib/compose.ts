@@ -32,7 +32,7 @@ export const ASPECT = FRAME.w / FRAME.h
 /**
  * Positions for the chosen cameras, in a 0..1 coordinate space.
  *
- * 'tesla' mirrors the car's own review screen and the layout Tor pointed at:
+ * 'tesla' mirrors the car's own review screen and the layout the car itself uses:
  * front on top, then right, back, left in a row beneath. It only makes sense
  * with all four; with fewer, a plain grid reads better, so the caller is
  * expected to fall back - `layoutFor` does that.

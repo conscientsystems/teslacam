@@ -18,7 +18,7 @@ import {
   type Telemetry,
 } from '../src/lib/sei.ts'
 
-const ROOT = process.env.TESLACAM_DIR ?? 'D:/TeslaCam'
+const ROOT = process.env.TESLACAM_DIR ?? './TeslaCam'
 const RECENT = path.join(ROOT, 'RecentClips')
 
 function read(p: string): ArrayBuffer {
@@ -229,7 +229,7 @@ test('a stationary car reads zero, not minus zero', () => {
   // Reversing at 2.39 m/s is 9 km/h backwards; the speedometer shows 9.
   assert.equal(speedIn('kmh', -2.3917), 9)
   assert.equal(speedIn('mph', -0.0223), 0)
-  // 21.7 m/s is the speed in Tor's first recorded clip.
+  // 21.7 m/s is the speed in the reference folder's first recorded clip.
   assert.equal(speedIn('kmh', 21.7038), 78)
   assert.equal(speedIn('mph', 21.7038), 49)
 })

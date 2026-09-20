@@ -258,7 +258,7 @@ export function buildIndex(samples: Telemetry[], fps: number = CLIP_FPS) {
 /**
  * Actions worth marking on the timeline, derived from the telemetry we actually
  * have. Tesla's dashcam SEI does NOT carry the horn - measured across 543 of
- * Tor's 2026 clips (972k messages) the only fields present are 1-15, and none of
+ * the reference folder's 2026 clips (972k messages) the only fields present are 1-15, and none of
  * them is a horn press; the horn only survives as a Sentry trigger reason in
  * event.json (`user_interaction_honk`), i.e. per event, not per second. So we
  * mark what the bitstream does carry: indicators, braking, reversing and
