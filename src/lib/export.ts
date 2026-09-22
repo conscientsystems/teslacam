@@ -92,6 +92,28 @@ export function canExport(): boolean {
  *  busy between draws. */
 const LOOKAHEAD = 6
 
+/** How many composed frames may wait in the encoder. Each one is a full
+ *  canvas snapshot (2560x1280 RGBA is 13 MB), and they are held until encoded.
+ *  The encoder is the slowest stage, so without this bound the queue grows
+ *  with the length of the export: a ten-minute export piled up gigabytes of
+ *  frames, Edge's GPU process died at 16 GB, and the next file read failed for
+ *  want of memory with a NotReadableError that says nothing of the kind. */
+const ENCODE_AHEAD = 8
+
+/** Resolves once the encoder has room again. `dequeue` fires every time a
+ *  frame leaves the queue; the timer is a safety net, not the mechanism. */
+function encoderRoom(encoder: VideoEncoder): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer)
+      encoder.removeEventListener('dequeue', done)
+      resolve()
+    }
+    const timer = setTimeout(done, 50)
+    encoder.addEventListener('dequeue', done)
+  })
+}
+
 /** Demuxed video: the chunks to feed a decoder, plus what is needed to make one. */
 interface Demuxed {
   chunks: EncodedVideoChunk[]
@@ -248,7 +270,46 @@ class FrameStream {
     })
   }
 
+  private current: VideoFrame | null = null
+  private upcoming: VideoFrame | null = null
+  private drained = false
+
+  /**
+   * The frame on screen `us` microseconds into the clip, or null once the clip
+   * has run out. The stream keeps ownership: draw it, do not close it.
+   *
+   * Frames are matched by timestamp, not taken one per output frame, because
+   * the cameras do not share a frame rate. The back camera records 30 fps
+   * against 36 for the others, so pulling one frame each per output frame ran
+   * it 20% fast and emptied it 51 seconds into every minute - the last ten
+   * seconds of each file exported with a black hole where the back camera was.
+   */
+  async frameAt(us: number): Promise<VideoFrame | null> {
+    for (;;) {
+      if (!this.upcoming && !this.drained) {
+        this.upcoming = await this.pull()
+        if (!this.upcoming) this.drained = true
+      }
+      if (this.upcoming && (!this.current || this.upcoming.timestamp <= us)) {
+        this.current?.close()
+        this.current = this.upcoming
+        this.upcoming = null
+        continue
+      }
+      break
+    }
+    const cur = this.current
+    if (!cur) return null
+    // Past the last frame's own duration the clip is over, even if that frame
+    // is still held - showing it frozen would pass for live footage.
+    if (this.drained && us >= cur.timestamp + (cur.duration ?? 1e6 / CLIP_FPS)) return null
+    return cur
+  }
+
   close() {
+    this.current?.close()
+    this.upcoming?.close()
+    this.current = this.upcoming = null
     for (const f of this.ready) f.close()
     this.ready = []
     try { this.decoder.close() } catch { /* already closed */ }
@@ -276,9 +337,12 @@ export async function exportVideo(
     video: { codec: 'avc', width: size.w, height: size.h, frameRate: CLIP_FPS },
     fastStart: 'in-memory',
   })
+  // Thrown from inside the callback the error went nowhere, and the export
+  // waited forever for an encoder that was already closed.
+  let encodeError: Error | null = null
   const encoder = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-    error: (e) => { throw e },
+    error: (e) => { encodeError = e instanceof Error ? e : new Error(String(e)) },
   })
   encoder.configure({
     codec: 'avc1.4d0034',            // Main profile, level 5.2: 2560x1440 fits
@@ -335,18 +399,16 @@ export async function exportVideo(
           // and thrown away.
           if (t >= part.toOffset) break
 
-          // One frame from every camera, in step.
+          // Whatever each camera shows at this instant. The streams own the
+          // frames and close them as they move past.
           const frames = new Map<Camera, VideoFrame>()
           for (const [cam, stream] of streams) {
-            const frame = await stream.pull()
+            const frame = await stream.frameAt(t * 1e6)
             if (frame) frames.set(cam, frame)
           }
           if (!frames.size) break
 
-          if (t < part.fromOffset) {
-            for (const frame of frames.values()) frame.close()
-            continue
-          }
+          if (t < part.fromOffset) continue
           ctx.fillStyle = '#000'
           ctx.fillRect(0, 0, size.w, size.h)
 
@@ -357,7 +419,6 @@ export async function exportVideo(
             ctx.drawImage(frame, box.x, box.y, box.w, box.h)
             if (req.overlay.labels) drawCameraLabel(ctx as any, cam, rect, size, req.lang)
           }
-          for (const frame of frames.values()) frame.close()
 
           drawOverlay(ctx as any, size, {
             telemetry: hud ? hud(t) : null,
@@ -376,9 +437,10 @@ export async function exportVideo(
           out.close()
           written++
 
-          if (encoder.encodeQueueSize > 20) {
-            await new Promise((r) => setTimeout(r, 0))
+          while (encoder.encodeQueueSize > ENCODE_AHEAD && !encodeError) {
+            await encoderRoom(encoder)
           }
+          if (encodeError) throw encodeError
           if (f % 30 === 0) {
             onProgress({
               phase: 'encoding', segment: si + 1, segments: parts.length,
@@ -398,6 +460,7 @@ export async function exportVideo(
       frames: written, fraction: 0.99,
     })
     await encoder.flush()
+    if (encodeError) throw encodeError
     muxer.finalize()
 
     onProgress({
