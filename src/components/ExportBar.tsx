@@ -79,7 +79,7 @@ export default function ExportBar({
       {progress && (
         <div className="mt-3">
           <p role="status" className="num text-sm text-muted">
-            {phaseText(progress)} — {Math.round(progress.fraction * 100)}%
+            {phaseText(progress)} - {Math.round(progress.fraction * 100)}%
           </p>
           <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-raised">
             <div className="h-full rounded-full bg-live transition-[width]"

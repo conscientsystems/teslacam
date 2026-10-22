@@ -245,7 +245,7 @@ export default function App() {
           {noTelemetry ? (
             <p className="mt-2 text-sm text-muted">
               Denne optagelse har ingen telemetri. Bilen skriver fart, gear og GPS
-              ind i videoen fra firmware 2025.44.25 — ældre klip har det ikke.
+              ind i videoen fra firmware 2025.44.25 - ældre klip har det ikke.
             </p>
           ) : telemetry ? (
             <div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-2">
@@ -271,7 +271,7 @@ export default function App() {
             </div>
           ) : (
             <p className="mt-2 text-sm text-faint">
-              Ingen data på dette tidspunkt — bilen holdt formentlig stille.
+              Ingen data på dette tidspunkt - bilen holdt formentlig stille.
             </p>
           )}
         </div>

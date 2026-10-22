@@ -95,7 +95,7 @@ export default function Picker({ onLoaded }: { onLoaded: (events: TeslaEvent[]) 
       <span className="eyebrow">teslacam.cscloud.dk</span>
       <h1 className="mt-2 text-3xl font-semibold tracking-tight">Dine dashcam-optagelser</h1>
       <p className="mt-3 text-muted">
-        Peg på din TeslaCam-mappe — på USB-stikken, et SD-kort eller en mappe på
+        Peg på din TeslaCam-mappe - på USB-stikken, et SD-kort eller en mappe på
         maskinen. Videoerne bliver liggende hvor de er.
       </p>
       <p className="mt-2 text-sm text-faint">
