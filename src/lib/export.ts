@@ -1,7 +1,7 @@
 /**
  * Writing the composed view out as a video file, entirely in the browser.
  *
- * demux (mp4box) -> decode (WebCodecs) -> draw (canvas) -> encode -> mux (mp4-muxer)
+ * demux (mp4box) -> decode (WebCodecs) -> draw (canvas) -> encode -> mux (Mediabunny)
  *
  * Not MediaRecorder over a playing video: that runs at wall-clock speed, so a
  * ten-minute sentry event takes ten minutes and produces WebM. This runs as
@@ -19,7 +19,7 @@
  * no camera runs more than a handful ahead.
  */
 
-import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
+import { BufferTarget, EncodedPacket, EncodedVideoPacketSource, Mp4OutputFormat, Output } from 'mediabunny'
 import { DataStream, Endianness, MP4BoxBuffer, createFile, type Movie, type Sample } from 'mp4box'
 
 import {
@@ -332,17 +332,26 @@ export async function exportVideo(
   const canvas = new OffscreenCanvas(size.w, size.h)
   const ctx = canvas.getContext('2d')!
 
-  const muxer = new Muxer({
-    target: new ArrayBufferTarget(),
-    video: { codec: 'avc', width: size.w, height: size.h, frameRate: CLIP_FPS },
-    fastStart: 'in-memory',
+  const output = new Output({
+    format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+    target: new BufferTarget(),
   })
+  const video = new EncodedVideoPacketSource('avc')
+  output.addVideoTrack(video, { frameRate: CLIP_FPS })
+  await output.start()
   // Thrown from inside the callback the error went nowhere, and the export
   // waited forever for an encoder that was already closed.
   let encodeError: Error | null = null
+  const fail = (e: unknown) => { encodeError ??= e instanceof Error ? e : new Error(String(e)) }
+  // add() is async; chaining keeps the packets in encoder order, and the chain
+  // is awaited before finalize() so the last packets are in the file.
+  let muxing: Promise<void> = Promise.resolve()
   const encoder = new VideoEncoder({
-    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-    error: (e) => { encodeError = e instanceof Error ? e : new Error(String(e)) },
+    output: (chunk, meta) => {
+      const packet = EncodedPacket.fromEncodedChunk(chunk)
+      muxing = muxing.then(() => video.add(packet, meta)).catch(fail)
+    },
+    error: fail,
   })
   encoder.configure({
     codec: 'avc1.4d0034',            // Main profile, level 5.2: 2560x1440 fits
@@ -460,17 +469,18 @@ export async function exportVideo(
       frames: written, fraction: 0.99,
     })
     await encoder.flush()
+    await muxing
     if (encodeError) throw encodeError
-    muxer.finalize()
+    await output.finalize()
 
     onProgress({
       phase: 'done', segment: parts.length, segments: parts.length,
       frames: written, fraction: 1,
     })
-    const { buffer } = muxer.target as ArrayBufferTarget
-    return new Blob([buffer], { type: 'video/mp4' })
+    return new Blob([output.target.buffer!], { type: 'video/mp4' })
   } finally {
     try { encoder.close() } catch { /* already closed by flush */ }
+    if (output.state === 'started') await output.cancel().catch(() => {})
   }
 }
 
